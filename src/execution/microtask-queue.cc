@@ -60,11 +60,17 @@ class ResolveAutoParallelPromiseTask : public threading::ThreadTask {
  public:
   ResolveAutoParallelPromiseTask(v8::Isolate* isolate,
                                  threading::TaskResult result,
-                                 v8::Global<v8::Value> promise_or_capability)
+                                 v8::Global<v8::Value>* promise_or_capability)
       : threading::ThreadTask("", {}),
         isolate_(isolate),
         result_(std::move(result)),
-        promise_or_capability_(std::move(promise_or_capability)) {}
+        promise_or_capability_(promise_or_capability) {}
+
+  ~ResolveAutoParallelPromiseTask() override {
+    if (!threading::ThreadPool::IsDisposing()) {
+      delete promise_or_capability_;
+    }
+  }
 
   bool IsInternal() const override { return true; }
 
@@ -76,13 +82,13 @@ class ResolveAutoParallelPromiseTask : public threading::ThreadTask {
     v8::Local<v8::Context> context = isolate->GetCurrentContext();
     if (context.IsEmpty()) {
       Isolate* internal_isolate = reinterpret_cast<Isolate*>(isolate);
-      context = v8::Utils::ToLocal(direct_handle(internal_isolate->native_context(), internal_isolate));
+      context = v8::Utils::ToLocal(direct_handle(internal_isolate->native_context()));
     }
     v8::Context::Scope context_scope(context);
 
-    v8::Local<v8::Value> pc_val = promise_or_capability_.Get(isolate);
+    v8::Local<v8::Value> pc_val = promise_or_capability_->Get(isolate);
     if (pc_val.IsEmpty() || pc_val->IsUndefined()) {
-      promise_or_capability_.Reset();
+      promise_or_capability_->Reset();
       return;
     }
 
@@ -136,13 +142,13 @@ class ResolveAutoParallelPromiseTask : public threading::ThreadTask {
       }
     }
 
-    promise_or_capability_.Reset();
+    promise_or_capability_->Reset();
   }
 
  private:
   v8::Isolate* isolate_;
   threading::TaskResult result_;
-  v8::Global<v8::Value> promise_or_capability_;
+  v8::Global<v8::Value>* promise_or_capability_;
 };
 
 class AutoParallelThreadTask : public threading::ThreadTask {
@@ -151,11 +157,17 @@ class AutoParallelThreadTask : public threading::ThreadTask {
                          std::string function_source,
                          std::vector<uint8_t> serialized_arguments,
                          int originator_worker_index,
-                         v8::Global<v8::Value> promise_or_capability)
+                         v8::Global<v8::Value>* promise_or_capability)
       : threading::ThreadTask(std::move(function_source), std::move(serialized_arguments)),
         originator_isolate_(originator_isolate),
         originator_worker_index_(originator_worker_index),
-        promise_or_capability_(std::move(promise_or_capability)) {}
+        promise_or_capability_(promise_or_capability) {}
+
+  ~AutoParallelThreadTask() override {
+    if (!threading::ThreadPool::IsDisposing()) {
+      delete promise_or_capability_;
+    }
+  }
 
   bool IsInternal() const override { return true; }
 
@@ -283,7 +295,7 @@ class AutoParallelThreadTask : public threading::ThreadTask {
     task_res.data = std::move(data);
 
     auto* resolve_task = new ResolveAutoParallelPromiseTask(
-        originator_isolate_, std::move(task_res), std::move(promise_or_capability_));
+        originator_isolate_, std::move(task_res), new v8::Global<v8::Value>(originator_isolate_, promise_or_capability_->Pass()));
 
     if (originator_worker_index_ != -1) {
       threading::ThreadPool::GetInstance()->SubmitToWorker(originator_worker_index_, resolve_task);
@@ -348,7 +360,7 @@ class AutoParallelThreadTask : public threading::ThreadTask {
 
   v8::Isolate* originator_isolate_;
   int originator_worker_index_;
-  v8::Global<v8::Value> promise_or_capability_;
+  v8::Global<v8::Value>* promise_or_capability_;
 };
 
 bool TryInterceptAutoParallelMicrotask(Tagged<Microtask> microtask) {
@@ -379,18 +391,20 @@ bool TryInterceptAutoParallelMicrotask(Tagged<Microtask> microtask) {
   Isolate* isolate = Isolate::TryGetCurrent();
   if (!isolate) return false;
 
+  v8::Isolate* v8_isolate = reinterpret_cast<v8::Isolate*>(isolate);
+  v8::HandleScope scope(v8_isolate);
+
   // We should also make sure the originator promise_or_capability is present and valid
   Handle<Object> pc_handle(reaction_job->promise_or_capability(), isolate);
   if (!IsJSPromise(*pc_handle) && !IsPromiseCapability(*pc_handle)) {
     return false;
   }
 
-  v8::Isolate* v8_isolate = reinterpret_cast<v8::Isolate*>(isolate);
-  v8::HandleScope scope(v8_isolate);
   v8::Local<v8::Context> v8_context = v8_isolate->GetCurrentContext();
   if (v8_context.IsEmpty()) {
-    v8_context = v8::Utils::ToLocal(direct_handle(isolate->native_context(), isolate));
+    v8_context = v8::Utils::ToLocal(direct_handle(reaction_job->context()->native_context(), isolate));
   }
+  v8::Context::Scope context_scope(v8_context);
 
   // Stringify function source
   Handle<JSFunction> handler_handle(handler, isolate);
@@ -422,7 +436,7 @@ bool TryInterceptAutoParallelMicrotask(Tagged<Microtask> microtask) {
   free(buffer.first);
 
   // Keep a persistent global handle to the promise_or_capability so the worker thread can resolve it
-  v8::Global<v8::Value> promise_or_capability_global(v8_isolate, v8::Utils::ToLocal(pc_handle));
+  v8::Global<v8::Value>* promise_or_capability_global = new v8::Global<v8::Value>(v8_isolate, v8::Utils::ToLocal(pc_handle));
 
   int caller_worker_index = threading::g_worker_index;
 
@@ -431,7 +445,7 @@ bool TryInterceptAutoParallelMicrotask(Tagged<Microtask> microtask) {
       std::move(source_str),
       std::move(serialized_bytes),
       caller_worker_index,
-      std::move(promise_or_capability_global));
+      promise_or_capability_global);
 
   threading::ThreadPool::GetInstance()->Submit(task);
   return true;

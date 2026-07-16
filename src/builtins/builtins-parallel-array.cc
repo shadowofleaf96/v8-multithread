@@ -28,11 +28,17 @@ class ResolveParallelArrayTask : public threading::ThreadTask {
  public:
   ResolveParallelArrayTask(v8::Isolate* isolate,
                            std::vector<threading::TaskResult> chunk_results,
-                           v8::Global<v8::Promise::Resolver> resolver)
+                           v8::Global<v8::Promise::Resolver>* resolver)
       : threading::ThreadTask("", {}),
         isolate_(isolate),
         chunk_results_(std::move(chunk_results)),
-        resolver_(std::move(resolver)) {}
+        resolver_(resolver) {}
+
+  ~ResolveParallelArrayTask() override {
+    if (!threading::ThreadPool::IsDisposing()) {
+      delete resolver_;
+    }
+  }
 
   bool IsInternal() const override { return true; }
 
@@ -47,7 +53,7 @@ class ResolveParallelArrayTask : public threading::ThreadTask {
     }
     v8::Context::Scope context_scope(context);
 
-    v8::Local<v8::Promise::Resolver> res = resolver_.Get(isolate);
+    v8::Local<v8::Promise::Resolver> res = resolver_->Get(isolate);
 
     // First check if any chunk failed
     for (const auto& chunk_res : chunk_results_) {
@@ -69,7 +75,7 @@ class ResolveParallelArrayTask : public threading::ThreadTask {
             res->Reject(context, v8::Exception::Error(v8::String::NewFromUtf8Literal(isolate, "Parallel processing chunk failed (header deserialization error)"))).FromJust();
           }
         }
-        resolver_.Reset();
+        resolver_->Reset();
         return;
       }
     }
@@ -82,13 +88,13 @@ class ResolveParallelArrayTask : public threading::ThreadTask {
       delegate.SetDeserializer(&deserializer);
       if (!deserializer.ReadHeader(context).FromMaybe(false)) {
         res->Reject(context, v8::Exception::Error(v8::String::NewFromUtf8Literal(isolate, "Failed to read chunk header"))).FromJust();
-        resolver_.Reset();
+        resolver_->Reset();
         return;
       }
       v8::Local<v8::Value> chunk_val;
       if (!deserializer.ReadValue(context).ToLocal(&chunk_val) || !chunk_val->IsArray()) {
         res->Reject(context, v8::Exception::Error(v8::String::NewFromUtf8Literal(isolate, "Failed to deserialize chunk array"))).FromJust();
-        resolver_.Reset();
+        resolver_->Reset();
         return;
       }
       v8::Local<v8::Array> chunk_arr = chunk_val.As<v8::Array>();
@@ -108,13 +114,13 @@ class ResolveParallelArrayTask : public threading::ThreadTask {
     }
 
     res->Resolve(context, result_arr).FromJust();
-    resolver_.Reset();
+    resolver_->Reset();
   }
 
  private:
   v8::Isolate* isolate_;
   std::vector<threading::TaskResult> chunk_results_;
-  v8::Global<v8::Promise::Resolver> resolver_;
+  v8::Global<v8::Promise::Resolver>* resolver_;
 };
 
 static Tagged<Object> ArrayParallelCommon(BuiltinArguments args, Isolate* isolate, bool is_filter) {
@@ -197,16 +203,18 @@ static Tagged<Object> ArrayParallelCommon(BuiltinArguments args, Isolate* isolat
     threading::ThreadPool::GetInstance()->Submit(task);
   }
 
-  v8::Global<v8::Promise::Resolver> resolver_global(v8_isolate, resolver);
+  auto* resolver_global_ptr = new v8::Global<v8::Promise::Resolver>(v8_isolate, resolver);
   int caller_worker_index = threading::g_worker_index;
 
-  std::thread([futures = std::move(futures), v8_isolate, caller_worker_index, resolver_global = std::move(resolver_global)]() mutable {
+  std::thread([futures = std::move(futures), v8_isolate, caller_worker_index, resolver_global_ptr]() mutable {
     std::vector<threading::TaskResult> results;
     for (auto& fut : futures) {
       results.push_back(fut->get());
     }
 
-    auto* resolve_task = new ResolveParallelArrayTask(v8_isolate, std::move(results), std::move(resolver_global));
+    if (threading::ThreadPool::IsDisposing()) return;
+
+    auto* resolve_task = new ResolveParallelArrayTask(v8_isolate, std::move(results), resolver_global_ptr);
 
     if (caller_worker_index != -1) {
       threading::ThreadPool::GetInstance()->SubmitToWorker(caller_worker_index, resolve_task);

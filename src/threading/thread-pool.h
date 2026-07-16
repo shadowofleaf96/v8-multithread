@@ -25,6 +25,8 @@ extern thread_local int g_worker_index;
 class ThreadPool {
  public:
   static ThreadPool* GetInstance();
+  static void GlobalTearDown();
+  static bool IsDisposing();
 
   explicit ThreadPool(size_t pool_size);
   ~ThreadPool();

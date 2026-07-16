@@ -15,17 +15,35 @@ namespace threading {
 
 extern thread_local int g_worker_index;
 
+MutexState::~MutexState() {
+  while (!pending_locks.empty()) {
+    PendingLock p = pending_locks.front();
+    pending_locks.pop();
+    if (!ThreadPool::IsDisposing()) {
+      delete p.callback;
+      delete p.resolver;
+    }
+  }
+}
+
 class ResolveMutexTask : public ThreadTask {
  public:
   ResolveMutexTask(std::shared_ptr<MutexState> state,
                    v8::Isolate* isolate,
-                   v8::Global<v8::Function> callback,
-                   v8::Global<v8::Promise::Resolver> resolver)
+                   v8::Global<v8::Function>* callback,
+                   v8::Global<v8::Promise::Resolver>* resolver)
       : ThreadTask("", {}),
         state_(std::move(state)),
         isolate_(isolate),
-        callback_(std::move(callback)),
-        resolver_(std::move(resolver)) {}
+        callback_(callback),
+        resolver_(resolver) {}
+
+  ~ResolveMutexTask() override {
+    if (!ThreadPool::IsDisposing()) {
+      delete callback_;
+      delete resolver_;
+    }
+  }
 
   bool IsInternal() const override { return true; }
 
@@ -40,8 +58,8 @@ class ResolveMutexTask : public ThreadTask {
     }
     v8::Context::Scope context_scope(context);
 
-    v8::Local<v8::Function> cb = callback_.Get(isolate);
-    v8::Local<v8::Promise::Resolver> res = resolver_.Get(isolate);
+    v8::Local<v8::Function> cb = callback_->Get(isolate);
+    v8::Local<v8::Promise::Resolver> res = resolver_->Get(isolate);
 
     state_->mutex.Lock();
     std::vector<uint8_t> serialized_val = state_->serialized_value;
@@ -101,8 +119,8 @@ class ResolveMutexTask : public ThreadTask {
  private:
   std::shared_ptr<MutexState> state_;
   v8::Isolate* isolate_;
-  v8::Global<v8::Function> callback_;
-  v8::Global<v8::Promise::Resolver> resolver_;
+  v8::Global<v8::Function>* callback_;
+  v8::Global<v8::Promise::Resolver>* resolver_;
 };
 
 void MutexState::ReleaseLock() {
@@ -112,7 +130,7 @@ void MutexState::ReleaseLock() {
     pending_locks.pop();
     mutex.Unlock();
 
-    auto* task = new ResolveMutexTask(shared_from_this(), pending.isolate, std::move(pending.callback), std::move(pending.resolver));
+    auto* task = new ResolveMutexTask(shared_from_this(), pending.isolate, new v8::Global<v8::Function>(pending.isolate, pending.callback->Pass()), new v8::Global<v8::Promise::Resolver>(pending.isolate, pending.resolver->Pass()));
 
     if (pending.worker_index != -1) {
       ThreadPool::GetInstance()->SubmitToWorker(pending.worker_index, task);
@@ -229,8 +247,8 @@ void MutexWrapper::Lock(const v8::FunctionCallbackInfo<v8::Value>& args) {
     PendingLock pending;
     pending.isolate = isolate;
     pending.worker_index = g_worker_index;
-    pending.callback.Reset(isolate, callback);
-    pending.resolver.Reset(isolate, resolver);
+    pending.callback = new v8::Global<v8::Function>(isolate, callback);
+    pending.resolver = new v8::Global<v8::Promise::Resolver>(isolate, resolver);
 
     state->pending_locks.push(std::move(pending));
     state->mutex.Unlock();

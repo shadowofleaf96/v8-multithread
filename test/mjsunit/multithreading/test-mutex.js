@@ -22,11 +22,10 @@
   // Lock and increment concurrently
   const promises = [];
   for (let i = 0; i < 10; ++i) {
-    promises.push(
-      Thread.spawn((mut) => {
-        return mut.lock((val) => val + 1);
-      }, mutex).then(h => Thread.join(h))
-    );
+    const handle = Thread.spawn((mut) => {
+      return mut.lock((val) => val + 1);
+    }, mutex);
+    promises.push(Thread.join(handle));
   }
 
   await Promise.all(promises);

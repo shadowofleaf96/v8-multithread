@@ -67,11 +67,17 @@ class ResolveJoinTask : public threading::ThreadTask {
  public:
   ResolveJoinTask(v8::Isolate* isolate,
                   threading::TaskResult result,
-                  v8::Global<v8::Promise::Resolver> resolver)
+                  v8::Global<v8::Promise::Resolver>* resolver)
       : threading::ThreadTask("", {}),
         isolate_(isolate),
         result_(std::move(result)),
-        resolver_(std::move(resolver)) {}
+        resolver_(resolver) {}
+
+  ~ResolveJoinTask() override {
+    if (!threading::ThreadPool::IsDisposing()) {
+      delete resolver_;
+    }
+  }
 
   bool IsInternal() const override { return true; }
 
@@ -86,7 +92,7 @@ class ResolveJoinTask : public threading::ThreadTask {
     }
     v8::Context::Scope context_scope(context);
 
-    v8::Local<v8::Promise::Resolver> res = resolver_.Get(isolate);
+    v8::Local<v8::Promise::Resolver> res = resolver_->Get(isolate);
 
     if (result_.success) {
       if (result_.data.empty()) {
@@ -125,22 +131,28 @@ class ResolveJoinTask : public threading::ThreadTask {
         }
       }
     }
-    resolver_.Reset();
+    resolver_->Reset();
   }
 
  private:
   v8::Isolate* isolate_;
   threading::TaskResult result_;
-  v8::Global<v8::Promise::Resolver> resolver_;
+  v8::Global<v8::Promise::Resolver>* resolver_;
 };
 
 class ResolveSleepTask : public threading::ThreadTask {
  public:
   ResolveSleepTask(v8::Isolate* isolate,
-                   v8::Global<v8::Promise::Resolver> resolver)
+                   v8::Global<v8::Promise::Resolver>* resolver)
       : threading::ThreadTask("", {}),
         isolate_(isolate),
-        resolver_(std::move(resolver)) {}
+        resolver_(resolver) {}
+
+  ~ResolveSleepTask() override {
+    if (!threading::ThreadPool::IsDisposing()) {
+      delete resolver_;
+    }
+  }
 
   bool IsInternal() const override { return true; }
 
@@ -155,14 +167,14 @@ class ResolveSleepTask : public threading::ThreadTask {
     }
     v8::Context::Scope context_scope(context);
 
-    v8::Local<v8::Promise::Resolver> res = resolver_.Get(isolate);
+    v8::Local<v8::Promise::Resolver> res = resolver_->Get(isolate);
     res->Resolve(context, v8::Undefined(isolate)).FromJust();
-    resolver_.Reset();
+    resolver_->Reset();
   }
 
  private:
   v8::Isolate* isolate_;
-  v8::Global<v8::Promise::Resolver> resolver_;
+  v8::Global<v8::Promise::Resolver>* resolver_;
 };
 
 namespace threading {
@@ -292,13 +304,15 @@ BUILTIN(ThreadJoin) {
     return ReadOnlyRoots(isolate).exception();
   }
 
-  v8::Global<v8::Promise::Resolver> resolver_global(v8_isolate, resolver);
+  auto* resolver_global_ptr = new v8::Global<v8::Promise::Resolver>(v8_isolate, resolver);
   int caller_worker_index = threading::g_worker_index;
 
-  std::thread([future_ptr, v8_isolate, caller_worker_index, resolver_global = std::move(resolver_global)]() mutable {
+  std::thread([future_ptr, v8_isolate, caller_worker_index, resolver_global_ptr]() mutable {
     threading::TaskResult result = future_ptr->get();
 
-    auto* resolve_task = new ResolveJoinTask(v8_isolate, std::move(result), std::move(resolver_global));
+    if (threading::ThreadPool::IsDisposing()) return;
+
+    auto* resolve_task = new ResolveJoinTask(v8_isolate, std::move(result), resolver_global_ptr);
 
     if (caller_worker_index != -1) {
       threading::ThreadPool::GetInstance()->SubmitToWorker(caller_worker_index, resolve_task);
@@ -344,13 +358,15 @@ BUILTIN(ThreadSleep) {
     return ReadOnlyRoots(isolate).exception();
   }
 
-  v8::Global<v8::Promise::Resolver> resolver_global(v8_isolate, resolver);
+  auto* resolver_global_ptr = new v8::Global<v8::Promise::Resolver>(v8_isolate, resolver);
   int caller_worker_index = threading::g_worker_index;
 
-  std::thread([v8_isolate, caller_worker_index, resolver_global = std::move(resolver_global), ms]() mutable {
+  std::thread([v8_isolate, caller_worker_index, resolver_global_ptr, ms]() mutable {
     std::this_thread::sleep_for(std::chrono::milliseconds(ms));
 
-    auto* task = new ResolveSleepTask(v8_isolate, std::move(resolver_global));
+    if (threading::ThreadPool::IsDisposing()) return;
+
+    auto* task = new ResolveSleepTask(v8_isolate, resolver_global_ptr);
 
     if (caller_worker_index != -1) {
       threading::ThreadPool::GetInstance()->SubmitToWorker(caller_worker_index, task);

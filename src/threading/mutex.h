@@ -19,8 +19,8 @@ namespace threading {
 struct PendingLock {
   v8::Isolate* isolate;
   int worker_index;
-  v8::Global<v8::Function> callback;
-  v8::Global<v8::Promise::Resolver> resolver;
+  v8::Global<v8::Function>* callback;
+  v8::Global<v8::Promise::Resolver>* resolver;
 };
 
 class MutexState : public std::enable_shared_from_this<MutexState> {
@@ -29,6 +29,8 @@ class MutexState : public std::enable_shared_from_this<MutexState> {
   std::vector<uint8_t> serialized_value;
   bool locked = false;
   std::queue<PendingLock> pending_locks;
+
+  ~MutexState();
 
   void ReleaseLock();
 };

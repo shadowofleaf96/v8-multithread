@@ -17,10 +17,27 @@ namespace threading {
 
 thread_local int g_worker_index = -1;
 
+static ThreadPool* g_thread_pool_instance = nullptr;
+static bool g_is_disposing = false;
+
 ThreadPool* ThreadPool::GetInstance() {
-  static ThreadPool* instance = new ThreadPool(
-      std::max(size_t(1), static_cast<size_t>(std::thread::hardware_concurrency())));
-  return instance;
+  if (!g_thread_pool_instance) {
+    g_thread_pool_instance = new ThreadPool(
+        std::max(size_t(1), static_cast<size_t>(std::thread::hardware_concurrency())));
+  }
+  return g_thread_pool_instance;
+}
+
+void ThreadPool::GlobalTearDown() {
+  g_is_disposing = true;
+  if (g_thread_pool_instance) {
+    delete g_thread_pool_instance;
+    g_thread_pool_instance = nullptr;
+  }
+}
+
+bool ThreadPool::IsDisposing() {
+  return g_is_disposing;
 }
 
 ThreadPool::ThreadPool(size_t pool_size) : pool_size_(pool_size) {
@@ -44,9 +61,12 @@ ThreadPool::~ThreadPool() {
   Terminate();
 
   // Clean up remaining tasks in global queue
+  // Set a dummy result before deleting so detached threads
+  // waiting on future->get() don't get broken_promise.
   while (!global_queue_.empty()) {
     ThreadTask* task = global_queue_.front();
     global_queue_.pop();
+    task->SetResult(false, {});
     delete task;
   }
 
@@ -54,6 +74,7 @@ ThreadPool::~ThreadPool() {
   for (size_t i = 0; i < pool_size_; ++i) {
     ThreadTask* task;
     while (deques_[i]->Pop(&task)) {
+      task->SetResult(false, {});
       delete task;
     }
   }
@@ -64,6 +85,7 @@ ThreadPool::~ThreadPool() {
     while (!private_queues_[i]->empty()) {
       ThreadTask* task = private_queues_[i]->front();
       private_queues_[i]->pop();
+      task->SetResult(false, {});
       delete task;
     }
   }

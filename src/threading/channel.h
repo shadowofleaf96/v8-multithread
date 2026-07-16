@@ -19,13 +19,15 @@ namespace threading {
 struct PendingReceiver {
   v8::Isolate* isolate;
   int worker_index;
-  v8::Global<v8::Promise::Resolver> resolver;
+  v8::Global<v8::Promise::Resolver>* resolver;
 };
 
 struct ChannelState {
   v8::base::Mutex mutex;
   std::queue<std::vector<uint8_t>> messages;
   std::queue<PendingReceiver> pending_receivers;
+
+  ~ChannelState();
 };
 
 class ChannelSender {

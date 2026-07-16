@@ -35,6 +35,9 @@
 #include "src/tracing/code-data-source.h"
 #endif  // defined(V8_USE_PERFETTO)
 #include "src/tracing/tracing-category-observer.h"
+#ifdef V8_ENABLE_MULTITHREADING
+#include "src/threading/thread-pool.h"
+#endif
 
 #if V8_ENABLE_WEBASSEMBLY
 #include "src/wasm/wasm-engine.h"
@@ -272,6 +275,9 @@ void V8::Dispose() {
   AdvanceStartupState(V8StartupState::kV8Disposing);
   CHECK(platform_);
 #if V8_ENABLE_WEBASSEMBLY
+#ifdef V8_ENABLE_MULTITHREADING
+  threading::ThreadPool::GlobalTearDown();
+#endif
   wasm::WasmEngine::GlobalTearDown();
 #endif  // V8_ENABLE_WEBASSEMBLY
 #if defined(USE_SIMULATOR)
