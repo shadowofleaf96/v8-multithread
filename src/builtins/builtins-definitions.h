@@ -1533,9 +1533,23 @@ constexpr int kGearboxGenericBuiltinIdOffset = -2;
   CPP(CallAsyncModuleFulfilled, JSParameterCount(0))                           \
   CPP(CallAsyncModuleRejected, JSParameterCount(0))
 
-#define BUILTIN_LIST_BASE(CPP, TFJ_TSA, TFJ, TFC_TSA, TFC, TFS, TFH, ASM) \
-  BUILTIN_LIST_BASE_TIER0(CPP, TFJ, TFC, TFS, TFH, ASM)                   \
-  BUILTIN_LIST_BASE_TIER1(CPP, TFJ_TSA, TFJ, TFC_TSA, TFC, TFS, TFH, ASM)
+#ifdef V8_ENABLE_MULTITHREADING
+#define BUILTIN_LIST_MULTITHREADING(CPP)                                       \
+  CPP(ThreadSpawn, kDontAdaptArgumentsSentinel)                                \
+  CPP(ThreadJoin, kDontAdaptArgumentsSentinel)                                \
+  CPP(ThreadSleep, kDontAdaptArgumentsSentinel)                                \
+  CPP(ThreadChannel, kDontAdaptArgumentsSentinel)                              \
+  CPP(ThreadMutex, kDontAdaptArgumentsSentinel)                                \
+  CPP(ArrayParallelMap, kDontAdaptArgumentsSentinel)                           \
+  CPP(ArrayParallelFilter, kDontAdaptArgumentsSentinel)
+#else
+#define BUILTIN_LIST_MULTITHREADING(CPP)
+#endif
+
+#define BUILTIN_LIST_BASE(CPP, TFJ_TSA, TFJ, TFC_TSA, TFC, TFS, TFH, ASM)      \
+  BUILTIN_LIST_BASE_TIER0(CPP, TFJ, TFC, TFS, TFH, ASM)                        \
+  BUILTIN_LIST_BASE_TIER1(CPP, TFJ_TSA, TFJ, TFC_TSA, TFC, TFS, TFH, ASM)        \
+  BUILTIN_LIST_MULTITHREADING(CPP)
 
 #ifdef V8_TEMPORAL_SUPPORT
 #define BUILTIN_LIST_TEMPORAL(CPP, TFJ)                                        \

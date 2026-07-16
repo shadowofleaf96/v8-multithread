@@ -1,0 +1,32 @@
+# Copyright 2026 the V8 project authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("../../gni/v8.gni")
+
+v8_source_set("threading") {
+  sources = []
+  deps = []
+
+  configs = [ "../..:internal_config" ]
+
+  if (v8_enable_multithreading) {
+    sources += [
+      "channel.cc",
+      "channel.h",
+      "mutex.cc",
+      "mutex.h",
+      "serializer.cc",
+      "serializer.h",
+      "task.h",
+      "thread-pool.cc",
+      "thread-pool.h",
+      "work-stealing-deque.h",
+    ]
+
+    deps += [
+      "../..:v8_libbase",
+      "../..:v8_libplatform",
+    ]
+  }
+}

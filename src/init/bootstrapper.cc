@@ -265,6 +265,9 @@ class Genesis {
 #if V8_ENABLE_WEBASSEMBLY
   void InitializeWasmJSPI();
 #endif
+#ifdef V8_ENABLE_MULTITHREADING
+  void InitializeGlobal_v8_enable_multithreading();
+#endif
   void InitializeGlobal_queueMicrotask();
 
   enum ArrayBufferKind { ARRAY_BUFFER, SHARED_ARRAY_BUFFER };
@@ -2496,6 +2499,10 @@ void Genesis::InitializeGlobal(DirectHandle<JSGlobalObject> global_object,
                           Builtin::kArrayPrototypeFlatMap, 1, kDontAdapt);
     SimpleInstallFunction(isolate_, proto, "map", Builtin::kArrayMap, 1,
                           kDontAdapt);
+#ifdef V8_ENABLE_MULTITHREADING
+    SimpleInstallFunction(isolate_, proto, "parallelMap", Builtin::kArrayParallelMap, 1, kDontAdapt);
+    SimpleInstallFunction(isolate_, proto, "parallelFilter", Builtin::kArrayParallelFilter, 1, kDontAdapt);
+#endif
     SimpleInstallFunction(isolate_, proto, "every", Builtin::kArrayEvery, 1,
                           kDontAdapt);
     SimpleInstallFunction(isolate_, proto, "some", Builtin::kArraySome, 1,
@@ -5154,6 +5161,9 @@ void Genesis::InitializeExperimentalGlobal() {
 #undef FEATURE_INITIALIZE_GLOBAL
   InitializeGlobal_regexp_linear_flag();
   InitializeGlobal_sharedarraybuffer();
+#ifdef V8_ENABLE_MULTITHREADING
+  InitializeGlobal_v8_enable_multithreading();
+#endif
 
   InitializeGlobal_queueMicrotask();
 }
@@ -6133,6 +6143,33 @@ void Genesis::InitializeGlobal_queueMicrotask() {
   InstallFunctionWithBuiltinId(isolate(), global_object, "queueMicrotask",
                                Builtin::kGlobalQueueMicrotask, 1, kAdapt);
 }
+
+#ifdef V8_ENABLE_MULTITHREADING
+void Genesis::InitializeGlobal_v8_enable_multithreading() {
+  Factory* factory = isolate()->factory();
+  HandleScope scope(isolate());
+  DirectHandle<JSGlobalObject> global(native_context()->global_object(),
+                                      isolate());
+
+  DirectHandle<String> thread_string =
+      factory->InternalizeUtf8String("Thread");
+  DirectHandle<JSObject> thread =
+      factory->NewJSObject(isolate()->object_function(), AllocationType::kOld);
+  JSObject::AddProperty(isolate(), global, thread_string, thread, DONT_ENUM);
+  InstallToStringTag(isolate(), thread, thread_string);
+
+  SimpleInstallFunction(isolate(), thread, "spawn",
+                        Builtin::kThreadSpawn, 1, kDontAdapt);
+  SimpleInstallFunction(isolate(), thread, "join",
+                        Builtin::kThreadJoin, 1, kDontAdapt);
+  SimpleInstallFunction(isolate(), thread, "sleep",
+                        Builtin::kThreadSleep, 1, kDontAdapt);
+  SimpleInstallFunction(isolate(), thread, "channel",
+                        Builtin::kThreadChannel, 0, kDontAdapt);
+  SimpleInstallFunction(isolate(), thread, "mutex",
+                        Builtin::kThreadMutex, 1, kDontAdapt);
+}
+#endif
 
 DirectHandle<JSFunction> Genesis::CreateArrayBuffer(
     DirectHandle<String> name, ArrayBufferKind array_buffer_kind) {

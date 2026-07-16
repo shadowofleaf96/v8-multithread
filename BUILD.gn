@@ -1030,6 +1030,7 @@ external_v8_defines = [
   "V8_31BIT_SMIS_ON_64BIT_ARCH",
   "V8_COMPRESS_ZONES",
   "V8_ENABLE_SANDBOX",
+  "V8_ENABLE_MULTITHREADING",
   "V8_DEPRECATION_WARNINGS",
   "V8_IMMINENT_DEPRECATION_WARNINGS",
   "V8_USE_PERFETTO",
@@ -1077,6 +1078,9 @@ if (v8_enable_pointer_compression || v8_enable_31bit_smis_on_64bit_arch) {
 }
 if (v8_enable_sandbox) {
   enabled_external_v8_defines += [ "V8_ENABLE_SANDBOX" ]
+}
+if (v8_enable_multithreading) {
+  enabled_external_v8_defines += [ "V8_ENABLE_MULTITHREADING" ]
 }
 if (v8_deprecation_warnings) {
   enabled_external_v8_defines += [ "V8_DEPRECATION_WARNINGS" ]
@@ -3181,6 +3185,7 @@ generated_file("v8_generate_features_json") {
     v8_enable_pointer_compression_shared_cage =
         v8_enable_pointer_compression_shared_cage
     v8_enable_sandbox = v8_enable_sandbox
+    v8_enable_multithreading = v8_enable_multithreading
     v8_enable_short_builtin_calls = v8_enable_short_builtin_calls
     v8_enable_v8_checks = v8_enable_v8_checks
     v8_enable_memory_accounting_checks = v8_enable_memory_accounting_checks
@@ -6837,6 +6842,14 @@ v8_cluster_source_set("v8_base_without_compiler") {
     "//third_party/fast_float",
     "//third_party/highway:libhwy",
   ]
+
+  if (v8_enable_multithreading) {
+    deps += [ "src/threading" ]
+    sources += [
+      "src/builtins/builtins-thread.cc",
+      "src/builtins/builtins-parallel-array.cc",
+    ]
+  }
 
   public_deps = [
     ":cppgc_base",

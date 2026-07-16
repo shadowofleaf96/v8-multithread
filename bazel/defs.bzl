@@ -580,6 +580,7 @@ def build_config_content(cpu, icu):
         ("js_shared_memory", "false"),
         ("leaptiering", "true"),
         ("lite_mode", "false"),
+        ("v8_enable_multithreading", "false"),
         ("local_off_stack_check", "false"),
         ("lower_limits_mode", "false"),
         ("memory_corruption_api", "false"),

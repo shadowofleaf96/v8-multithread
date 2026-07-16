@@ -277,6 +277,9 @@ declare_args() {
   # Some fuzzers depend on fuzzing functionality linked into the v8 library.
   # For binary size reasons this functionality is not always available.
   v8_wasm_random_fuzzers = ""
+
+  # Enable multithreading support in V8.
+  v8_enable_multithreading = false
 }
 
 declare_args() {
