@@ -56,6 +56,8 @@ staying idiomatic to JavaScript with full **async/await** integration.
 
 ### JavaScript API
 
+For a simplified and fully explained guide of the APIs, see the [Multithreading API Documentation](MULTITHREADING_API.md).
+
 #### Thread.spawn — Async Task Execution
 
 `Thread.spawn` schedules a function on a pool thread and returns an awaitable
@@ -237,6 +239,28 @@ out/x64.release/d8 --enable-multithreading my_script.js
 |------|---------|-------------|
 | `v8_enable_multithreading` | `false` | Enable the threading runtime and JS API |
 | `v8_thread_pool_size` | `0` (auto) | Number of pool threads. `0` = `hardware_concurrency` |
+
+### Node.js Integration
+
+> [!TIP]
+> **Want to test it out?** You can use the pre-configured custom Node.js repository ready for testing: [shadowofleaf96/custom-node](https://github.com/shadowofleaf96/custom-node).
+
+This experimental multithreading engine can be embedded directly into Node.js, allowing native multithreading in your Node.js applications.
+
+To build Node.js with V8 multithreading support:
+
+1. Clone the Node.js repository (`git clone https://github.com/nodejs/node.git`).
+2. Replace the `deps/v8` directory in the Node.js source tree with this customized V8 repository.
+3. Configure the Node.js build with the multithreading flag enabled:
+   ```bash
+   # On Windows (requires Visual Studio with C++ Clang Compiler and Rust)
+   .\vcbuild.bat --enable-v8-multithreading
+   
+   # On POSIX (Linux/macOS)
+   ./configure --enable-v8-multithreading
+   make -j8
+   ```
+4. This will automatically compile V8's multithreading components and link them into the Node.js binary. The threading APIs (`Thread.spawn`, `Thread.channel`, etc.) will be exposed natively within the Node.js environment.
 
 ### Platform Support
 
