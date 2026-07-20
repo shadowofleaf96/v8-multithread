@@ -24,6 +24,9 @@ extern thread_local int g_worker_index;
 
 class ThreadPool {
  public:
+  static constexpr size_t kWorkerInitialHeapSize = 2 * 1024 * 1024;   // 2 MB
+  static constexpr size_t kWorkerMaxHeapSize = 16 * 1024 * 1024;      // 16 MB
+
   static ThreadPool* GetInstance();
   static void GlobalTearDown();
   static bool IsDisposing();
@@ -43,6 +46,7 @@ class ThreadPool {
   ThreadTask* GetTask(size_t worker_index);
 
   void Terminate();
+  void Resize(size_t new_pool_size);
 
   size_t pool_size() const { return pool_size_; }
 
@@ -53,6 +57,8 @@ class ThreadPool {
     ~WorkerThread() override = default;
 
     void Run() override;
+    void Terminate() { terminate_.store(true, std::memory_order_relaxed); }
+    bool IsTerminated() const { return terminate_.load(std::memory_order_relaxed); }
 
    private:
     void ExecuteTask(v8::Isolate* isolate, ThreadTask* task);
@@ -60,6 +66,7 @@ class ThreadPool {
 
     ThreadPool* pool_;
     size_t worker_index_;
+    std::atomic<bool> terminate_{false};
   };
 
   bool HasWork(size_t worker_index);

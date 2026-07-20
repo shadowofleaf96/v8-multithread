@@ -283,6 +283,22 @@ To build Node.js with V8 multithreading support:
    async/await ecosystem.
 
 
+Changelog
+=============
+
+### Memory Optimization Update (July 2026)
+- **Zero-Copy ArrayBuffer Transfer**: Added the ability to transfer `ArrayBuffer` objects between threads using the `{ transfer: [buffer] }` option in `Thread.spawn` and `tx.send`, eliminating the overhead of copying large memory structures.
+- **Dynamic Pool Sizing**: Introduced `Thread.getPoolSize()` and `Thread.setPoolSize(n)` builtins to dynamically scale the thread pool up and down. The underlying deque arrays also automatically shrink to reclaim memory when idle.
+- **Bounded Channels**: `Thread.channel(capacity)` now accepts a capacity limit. Full channels exert back-pressure, pausing the `Promise` of the sender instead of infinitely queuing messages in memory.
+- **Lazy Worker Initialization**: Worker threads now lazily initialize their `v8::Isolate` environments and are constrained to strict heap size limits (2MB initial, 16MB maximum), dramatically reducing baseline RAM consumption.
+
+### Initial Multithreading Release
+- **Core Engine**: Introduced the Chase-Lev work-stealing thread pool directly into the V8 runtime.
+- **Thread Control**: Added `Thread.spawn`, `Thread.join`, and non-blocking `Thread.sleep`.
+- **Concurrency Primitives**: Introduced safe message-passing `Channels` and shared-state `Mutex` constructs.
+- **Automatic Parallelism**: Added `Array.prototype.parallelMap`, `Array.prototype.parallelFilter`, and parallel task execution within `Promise.all()`.
+
+
 Contributing
 =============
 

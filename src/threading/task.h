@@ -9,6 +9,7 @@
 #include <vector>
 #include <future>
 #include <memory>
+#include "include/v8-array-buffer.h"
 
 namespace v8 {
 class Isolate;
@@ -22,9 +23,10 @@ struct TaskResult {
 
 class ThreadTask {
  public:
-  ThreadTask(std::string function_source, std::vector<uint8_t> serialized_arguments)
+  ThreadTask(std::string function_source, std::vector<uint8_t> serialized_arguments, std::vector<std::shared_ptr<v8::BackingStore>> backing_stores = {})
       : function_source_(std::move(function_source)),
-        serialized_arguments_(std::move(serialized_arguments)) {}
+        serialized_arguments_(std::move(serialized_arguments)),
+        backing_stores_(std::move(backing_stores)) {}
 
   virtual ~ThreadTask() = default;
 
@@ -33,6 +35,7 @@ class ThreadTask {
 
   const std::string& function_source() const { return function_source_; }
   const std::vector<uint8_t>& serialized_arguments() const { return serialized_arguments_; }
+  const std::vector<std::shared_ptr<v8::BackingStore>>& backing_stores() const { return backing_stores_; }
 
   std::future<TaskResult> GetFuture() {
     return promise_.get_future();
@@ -48,6 +51,7 @@ class ThreadTask {
  private:
   std::string function_source_;
   std::vector<uint8_t> serialized_arguments_;
+  std::vector<std::shared_ptr<v8::BackingStore>> backing_stores_;
   std::promise<TaskResult> promise_;
 };
 

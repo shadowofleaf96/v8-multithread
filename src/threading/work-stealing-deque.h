@@ -82,14 +82,34 @@ class WorkStealingDeque {
         }
         bottom_.store(b + 1, std::memory_order_relaxed);
         *item = val;
+        MaybeShrink();
         return true;
       }
       *item = val;
+      MaybeShrink();
       return true;
     } else {
       // Deque is empty
       bottom_.store(b + 1, std::memory_order_relaxed);
+      MaybeShrink();
       return false;
+    }
+  }
+
+  void MaybeShrink() {
+    Array* a = active_array_.load(std::memory_order_relaxed);
+    int64_t b = bottom_.load(std::memory_order_relaxed);
+    int64_t t = top_.load(std::memory_order_relaxed);
+    size_t current_size = b > t ? static_cast<size_t>(b - t) : 0;
+
+    if (a->capacity() > 64 && current_size < a->capacity() / 4) {
+      size_t new_cap = std::max(size_t(64), a->capacity() / 2);
+      Array* new_arr = new Array(new_cap);
+      for (int64_t i = t; i < b; ++i) {
+        new_arr->Set(i, a->Get(i));
+      }
+      active_array_.store(new_arr, std::memory_order_release);
+      obsolete_arrays_.push_back(a);
     }
   }
 

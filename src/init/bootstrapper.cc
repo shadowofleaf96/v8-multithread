@@ -6160,6 +6160,10 @@ void Genesis::InitializeGlobal_v8_enable_multithreading() {
 
   SimpleInstallFunction(isolate(), thread, "spawn",
                         Builtin::kThreadSpawn, 1, kDontAdapt);
+  SimpleInstallFunction(isolate(), thread, "getPoolSize",
+                        Builtin::kThreadGetPoolSize, 0, kDontAdapt);
+  SimpleInstallFunction(isolate(), thread, "setPoolSize",
+                        Builtin::kThreadSetPoolSize, 1, kDontAdapt);
   SimpleInstallFunction(isolate(), thread, "join",
                         Builtin::kThreadJoin, 1, kDontAdapt);
   SimpleInstallFunction(isolate(), thread, "sleep",

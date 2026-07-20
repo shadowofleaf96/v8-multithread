@@ -229,6 +229,33 @@ BUILTIN(ThreadSpawn) {
   std::string source_str(*fn_source_utf8, fn_source_utf8.length());
 
   int num_args = args.length() - 2;
+  std::vector<std::shared_ptr<v8::BackingStore>> backing_stores;
+  threading::ThreadingSerializerDelegate delegate;
+  v8::ValueSerializer serializer(v8_isolate, &delegate);
+  delegate.SetSerializer(&serializer);
+
+  if (num_args > 0) {
+    v8::Local<v8::Value> last_arg_val = v8::Utils::ToLocal(args.at<Object>(num_args + 1));
+    if (last_arg_val->IsObject() && !last_arg_val->IsArrayBuffer()) {
+      v8::Local<v8::Object> last_arg = last_arg_val.As<v8::Object>();
+      v8::Local<v8::String> transfer_key = v8::String::NewFromUtf8Literal(v8_isolate, "transfer");
+      v8::Local<v8::Value> transfer_val;
+      if (last_arg->Get(context, transfer_key).ToLocal(&transfer_val) && transfer_val->IsArray()) {
+        v8::Local<v8::Array> transfer_list = transfer_val.As<v8::Array>();
+        for (uint32_t i = 0; i < transfer_list->Length(); ++i) {
+          v8::Local<v8::Value> item;
+          if (transfer_list->Get(context, i).ToLocal(&item) && item->IsArrayBuffer()) {
+            v8::Local<v8::ArrayBuffer> ab = item.As<v8::ArrayBuffer>();
+            serializer.TransferArrayBuffer(i, ab);
+            backing_stores.push_back(ab->GetBackingStore());
+            ab->Detach(v8::Local<v8::Value>()).Check();
+          }
+        }
+        num_args--; // do not serialize the options object as an argument
+      }
+    }
+  }
+
   v8::Local<v8::Array> args_array = v8::Array::New(v8_isolate, num_args);
   for (int i = 0; i < num_args; ++i) {
     v8::Local<v8::Value> arg_val = v8::Utils::ToLocal(args.at<Object>(i + 2));
@@ -239,9 +266,6 @@ BUILTIN(ThreadSpawn) {
     }
   }
 
-  threading::ThreadingSerializerDelegate delegate;
-  v8::ValueSerializer serializer(v8_isolate, &delegate);
-  delegate.SetSerializer(&serializer);
   serializer.WriteHeader();
   if (!serializer.WriteValue(context, args_array).FromMaybe(false)) {
     v8_isolate->ThrowException(v8::Exception::Error(
@@ -252,7 +276,7 @@ BUILTIN(ThreadSpawn) {
   std::vector<uint8_t> serialized_bytes(buffer.first, buffer.first + buffer.second);
   free(buffer.first);
 
-  auto* task = new threading::ThreadTask(std::move(source_str), std::move(serialized_bytes));
+  auto* task = new threading::ThreadTask(std::move(source_str), std::move(serialized_bytes), std::move(backing_stores));
   std::shared_ptr<std::future<threading::TaskResult>> future_ptr =
       std::make_shared<std::future<threading::TaskResult>>(task->GetFuture());
 
@@ -401,6 +425,13 @@ BUILTIN(ThreadChannel) {
 
   auto state = std::make_shared<threading::ChannelState>();
 
+  if (args.length() >= 2) {
+    v8::Local<v8::Value> cap_val = v8::Utils::ToLocal(args.at<Object>(1));
+    if (cap_val->IsNumber()) {
+      state->capacity = cap_val->IntegerValue(context).FromMaybe(0);
+    }
+  }
+
   v8::Local<v8::Object> sender_obj = threading::CreateChannelSender(v8_isolate, state);
   v8::Local<v8::Object> receiver_obj = threading::CreateChannelReceiver(v8_isolate, state);
 
@@ -443,7 +474,41 @@ BUILTIN(ThreadMutex) {
 
   return *v8::Utils::OpenHandle(*mutex_obj);
 }
+BUILTIN(ThreadGetPoolSize) {
+  HandleScope scope(isolate);
+  v8::Isolate* v8_isolate = reinterpret_cast<v8::Isolate*>(isolate);
+  size_t pool_size = threading::ThreadPool::GetInstance()->pool_size();
+  return *v8::Utils::OpenHandle(*v8::Number::New(v8_isolate, static_cast<double>(pool_size)));
+}
 
+BUILTIN(ThreadSetPoolSize) {
+  HandleScope scope(isolate);
+  v8::Isolate* v8_isolate = reinterpret_cast<v8::Isolate*>(isolate);
+  v8::Local<v8::Context> context = v8_isolate->GetCurrentContext();
+
+  if (args.length() < 2) {
+    v8_isolate->ThrowException(v8::Exception::TypeError(
+        v8::String::NewFromUtf8Literal(v8_isolate, "Missing pool size argument")));
+    return ReadOnlyRoots(isolate).exception();
+  }
+
+  v8::Local<v8::Value> size_val = v8::Utils::ToLocal(args.at<Object>(1));
+  if (!size_val->IsNumber()) {
+    v8_isolate->ThrowException(v8::Exception::TypeError(
+        v8::String::NewFromUtf8Literal(v8_isolate, "Pool size must be a number")));
+    return ReadOnlyRoots(isolate).exception();
+  }
+
+  int new_size = size_val->Int32Value(context).FromMaybe(0);
+  if (new_size <= 0 || new_size > 128) {
+    v8_isolate->ThrowException(v8::Exception::RangeError(
+        v8::String::NewFromUtf8Literal(v8_isolate, "Pool size must be between 1 and 128")));
+    return ReadOnlyRoots(isolate).exception();
+  }
+
+  threading::ThreadPool::GetInstance()->Resize(new_size);
+  return ReadOnlyRoots(isolate).undefined_value();
+}
 }  // namespace internal
 }  // namespace v8
 

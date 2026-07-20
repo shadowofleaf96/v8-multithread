@@ -16,7 +16,19 @@ namespace v8 {
 namespace internal {
 namespace threading {
 
+struct ChannelMessage {
+  std::vector<uint8_t> data;
+  std::vector<std::shared_ptr<v8::BackingStore>> backing_stores;
+};
+
 struct PendingReceiver {
+  v8::Isolate* isolate;
+  int worker_index;
+  v8::Global<v8::Promise::Resolver>* resolver;
+};
+
+struct PendingSender {
+  ChannelMessage msg;
   v8::Isolate* isolate;
   int worker_index;
   v8::Global<v8::Promise::Resolver>* resolver;
@@ -24,8 +36,10 @@ struct PendingReceiver {
 
 struct ChannelState {
   v8::base::Mutex mutex;
-  std::queue<std::vector<uint8_t>> messages;
+  std::queue<ChannelMessage> messages;
   std::queue<PendingReceiver> pending_receivers;
+  std::queue<PendingSender> pending_senders;
+  size_t capacity = 0;
 
   ~ChannelState();
 };

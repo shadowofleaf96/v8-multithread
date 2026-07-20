@@ -190,7 +190,7 @@ ThreadTask* ThreadPool::GetTask(size_t worker_index) {
     // 5. No work found, wait on condition variable
     {
       v8::base::MutexGuard guard(&pool_mutex_);
-      if (terminated_.load(std::memory_order_relaxed)) {
+      if (terminated_.load(std::memory_order_relaxed) || worker_index >= pool_size_) {
         break;
       }
 
@@ -203,6 +203,42 @@ ThreadTask* ThreadPool::GetTask(size_t worker_index) {
   }
 
   return nullptr;
+}
+
+void ThreadPool::Resize(size_t new_pool_size) {
+  std::vector<std::unique_ptr<WorkerThread>> to_join;
+  {
+    v8::base::MutexGuard guard(&pool_mutex_);
+    if (new_pool_size == pool_size_) return;
+    
+    if (new_pool_size > pool_size_) {
+      for (size_t i = pool_size_; i < new_pool_size; ++i) {
+        if (deques_.size() <= i) {
+          deques_.push_back(std::make_unique<WorkStealingDeque<ThreadTask*>>());
+          private_mutexes_.push_back(std::make_unique<v8::base::Mutex>());
+          private_queues_.push_back(std::make_unique<std::queue<ThreadTask*>>());
+        }
+        auto worker = std::make_unique<WorkerThread>(this, i);
+        CHECK(worker->Start());
+        threads_.push_back(std::move(worker));
+      }
+      pool_size_ = new_pool_size;
+    } else {
+      for (size_t i = new_pool_size; i < pool_size_; ++i) {
+        threads_[i]->Terminate();
+      }
+      for (size_t i = new_pool_size; i < pool_size_; ++i) {
+        to_join.push_back(std::move(threads_[i]));
+      }
+      threads_.resize(new_pool_size);
+      pool_size_ = new_pool_size;
+      work_cv_.NotifyAll();
+    }
+  }
+
+  for (auto& worker : to_join) {
+    worker->Join();
+  }
 }
 
 void ThreadPool::Terminate() {
@@ -226,28 +262,37 @@ ThreadPool::WorkerThread::WorkerThread(ThreadPool* pool, size_t index)
 
 void ThreadPool::WorkerThread::Run() {
   g_worker_index = static_cast<int>(worker_index_);
-  v8::ArrayBuffer::Allocator* allocator = v8::ArrayBuffer::Allocator::NewDefaultAllocator();
-  v8::Isolate::CreateParams create_params;
-  create_params.array_buffer_allocator = allocator;
-  v8::Isolate* isolate = v8::Isolate::New(create_params);
+  v8::ArrayBuffer::Allocator* allocator = nullptr;
+  v8::Isolate* isolate = nullptr;
 
-  {
-    v8::Locker locker(isolate);
-    v8::Isolate::Scope isolate_scope(isolate);
-
-    while (true) {
-      ThreadTask* task = pool_->GetTask(worker_index_);
-      if (task == nullptr) {
-        break;
-      }
-
-      ExecuteTask(isolate, task);
-      delete task;
+  while (true) {
+    ThreadTask* task = pool_->GetTask(worker_index_);
+    if (task == nullptr) {
+      break;
     }
+
+    if (!isolate) {
+      allocator = v8::ArrayBuffer::Allocator::NewDefaultAllocator();
+      v8::Isolate::CreateParams create_params;
+      create_params.array_buffer_allocator = allocator;
+      create_params.constraints.ConfigureDefaultsFromHeapSize(
+          ThreadPool::kWorkerInitialHeapSize,
+          ThreadPool::kWorkerMaxHeapSize);
+      isolate = v8::Isolate::New(create_params);
+    }
+
+    {
+      v8::Locker locker(isolate);
+      v8::Isolate::Scope isolate_scope(isolate);
+      ExecuteTask(isolate, task);
+    }
+    delete task;
   }
 
-  isolate->Dispose();
-  delete allocator;
+  if (isolate) {
+    isolate->Dispose();
+    delete allocator;
+  }
 }
 
 void ThreadPool::WorkerThread::ExecuteTask(v8::Isolate* isolate, ThreadTask* task) {
@@ -266,6 +311,13 @@ void ThreadPool::WorkerThread::ExecuteTask(v8::Isolate* isolate, ThreadTask* tas
     ThreadingDeserializerDelegate delegate;
     v8::ValueDeserializer deserializer(isolate, serialized_args.data(), serialized_args.size(), &delegate);
     delegate.SetDeserializer(&deserializer);
+
+    const auto& backing_stores = task->backing_stores();
+    for (uint32_t i = 0; i < backing_stores.size(); ++i) {
+      v8::Local<v8::ArrayBuffer> ab = v8::ArrayBuffer::New(isolate, backing_stores[i]);
+      deserializer.TransferArrayBuffer(i, ab);
+    }
+
     bool ok = false;
     if (deserializer.ReadHeader(context).FromMaybe(false)) {
       v8::Local<v8::Value> args_array_val;

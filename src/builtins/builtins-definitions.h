@@ -1540,6 +1540,8 @@ constexpr int kGearboxGenericBuiltinIdOffset = -2;
   CPP(ThreadSleep, kDontAdaptArgumentsSentinel)                                \
   CPP(ThreadChannel, kDontAdaptArgumentsSentinel)                              \
   CPP(ThreadMutex, kDontAdaptArgumentsSentinel)                                \
+  CPP(ThreadGetPoolSize, kDontAdaptArgumentsSentinel)                          \
+  CPP(ThreadSetPoolSize, kDontAdaptArgumentsSentinel)                          \
   CPP(ArrayParallelMap, kDontAdaptArgumentsSentinel)                           \
   CPP(ArrayParallelFilter, kDontAdaptArgumentsSentinel)
 #else
