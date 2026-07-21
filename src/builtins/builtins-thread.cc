@@ -230,9 +230,25 @@ BUILTIN(ThreadSpawn) {
 
   int num_args = args.length() - 2;
   std::vector<std::shared_ptr<v8::BackingStore>> backing_stores;
-  threading::ThreadingSerializerDelegate delegate;
+  std::vector<std::shared_ptr<v8::BackingStore>> shared_array_buffers;
+  threading::ThreadingSerializerDelegate delegate(&shared_array_buffers);
   v8::ValueSerializer serializer(v8_isolate, &delegate);
   delegate.SetSerializer(&serializer);
+
+  v8::Local<v8::StackTrace> stack_trace = v8::StackTrace::CurrentStackTrace(v8_isolate, 10);
+  std::string caller_stack_trace_str = "";
+  if (!stack_trace.IsEmpty()) {
+    for (int i = 0; i < stack_trace->GetFrameCount(); ++i) {
+      v8::Local<v8::StackFrame> frame = stack_trace->GetFrame(v8_isolate, i);
+      v8::String::Utf8Value func_name(v8_isolate, frame->GetFunctionName());
+      v8::String::Utf8Value script_name(v8_isolate, frame->GetScriptNameOrSourceURL());
+      caller_stack_trace_str += "    at ";
+      caller_stack_trace_str += (*func_name ? *func_name : "<anonymous>");
+      caller_stack_trace_str += " (";
+      caller_stack_trace_str += (*script_name ? *script_name : "<anonymous>");
+      caller_stack_trace_str += ":" + std::to_string(frame->GetLineNumber()) + ":" + std::to_string(frame->GetColumn()) + ")\n";
+    }
+  }
 
   if (num_args > 0) {
     v8::Local<v8::Value> last_arg_val = v8::Utils::ToLocal(args.at<Object>(num_args + 1));
@@ -276,7 +292,7 @@ BUILTIN(ThreadSpawn) {
   std::vector<uint8_t> serialized_bytes(buffer.first, buffer.first + buffer.second);
   free(buffer.first);
 
-  auto* task = new threading::ThreadTask(std::move(source_str), std::move(serialized_bytes), std::move(backing_stores));
+  auto* task = new threading::ThreadTask(std::move(source_str), std::move(serialized_bytes), std::move(backing_stores), std::move(shared_array_buffers), std::move(caller_stack_trace_str));
   std::shared_ptr<std::future<threading::TaskResult>> future_ptr =
       std::make_shared<std::future<threading::TaskResult>>(task->GetFuture());
 
@@ -331,35 +347,54 @@ BUILTIN(ThreadJoin) {
   auto* resolver_global_ptr = new v8::Global<v8::Promise::Resolver>(v8_isolate, resolver);
   int caller_worker_index = threading::g_worker_index;
 
-  std::thread([future_ptr, v8_isolate, caller_worker_index, resolver_global_ptr]() mutable {
-    threading::TaskResult result = future_ptr->get();
+  class BackgroundJoinWaiterTask : public v8::Task {
+   public:
+    BackgroundJoinWaiterTask(std::shared_ptr<std::future<threading::TaskResult>> future_ptr,
+                             v8::Isolate* v8_isolate, int caller_worker_index,
+                             v8::Global<v8::Promise::Resolver>* resolver_global_ptr)
+        : future_ptr_(std::move(future_ptr)),
+          v8_isolate_(v8_isolate),
+          caller_worker_index_(caller_worker_index),
+          resolver_global_ptr_(resolver_global_ptr) {}
 
-    if (threading::ThreadPool::IsDisposing()) return;
+    void Run() override {
+      threading::TaskResult result = future_ptr_->get();
+      if (threading::ThreadPool::IsDisposing()) return;
 
-    auto* resolve_task = new ResolveJoinTask(v8_isolate, std::move(result), resolver_global_ptr);
-
-    if (caller_worker_index != -1) {
-      threading::ThreadPool::GetInstance()->SubmitToWorker(caller_worker_index, resolve_task);
-    } else {
-      class ForegroundResolveJoinTask : public v8::Task {
-       public:
-        explicit ForegroundResolveJoinTask(ResolveJoinTask* task) : task_(task) {}
-        void Run() override {
-          task_->RunInternal(task_->receiver_isolate());
-          delete task_;
-        }
-       private:
-        ResolveJoinTask* task_;
-      };
-
-      auto task_runner = V8::GetCurrentPlatform()->GetForegroundTaskRunner(v8_isolate);
-      if (task_runner) {
-        task_runner->PostTask(std::make_unique<ForegroundResolveJoinTask>(resolve_task));
+      auto* resolve_task = new ResolveJoinTask(v8_isolate_, std::move(result), resolver_global_ptr_);
+      if (caller_worker_index_ != -1) {
+        threading::ThreadPool::GetInstance()->SubmitToWorker(caller_worker_index_, resolve_task);
       } else {
-        delete resolve_task;
+        class ForegroundResolveJoinTask : public v8::Task {
+         public:
+          explicit ForegroundResolveJoinTask(ResolveJoinTask* task) : task_(task) {}
+          void Run() override {
+            task_->RunInternal(task_->receiver_isolate());
+            delete task_;
+          }
+         private:
+          ResolveJoinTask* task_;
+        };
+
+        auto task_runner = V8::GetCurrentPlatform()->GetForegroundTaskRunner(v8_isolate_);
+        if (task_runner) {
+          task_runner->PostTask(std::make_unique<ForegroundResolveJoinTask>(resolve_task));
+        } else {
+          delete resolve_task;
+        }
       }
     }
-  }).detach();
+
+   private:
+    std::shared_ptr<std::future<threading::TaskResult>> future_ptr_;
+    v8::Isolate* v8_isolate_;
+    int caller_worker_index_;
+    v8::Global<v8::Promise::Resolver>* resolver_global_ptr_;
+  };
+
+  V8::GetCurrentPlatform()->PostTaskOnWorkerThread(
+      v8::TaskPriority::kUserBlocking,
+      std::make_unique<BackgroundJoinWaiterTask>(future_ptr, v8_isolate, caller_worker_index, resolver_global_ptr));
 
   return *v8::Utils::OpenHandle(*resolver->GetPromise());
 }

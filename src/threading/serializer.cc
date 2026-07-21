@@ -95,6 +95,22 @@ v8::MaybeLocal<v8::Object> ThreadingDeserializerDelegate::ReadHostObject(v8::Iso
   return v8::MaybeLocal<v8::Object>();
 }
 
+v8::MaybeLocal<v8::SharedArrayBuffer> ThreadingDeserializerDelegate::GetSharedArrayBufferFromId(v8::Isolate* isolate, uint32_t clone_id) {
+  if (shared_array_buffers_ && clone_id < shared_array_buffers_->size()) {
+    return v8::SharedArrayBuffer::New(isolate, (*shared_array_buffers_)[clone_id]);
+  }
+  return v8::MaybeLocal<v8::SharedArrayBuffer>();
+}
+
+v8::Maybe<uint32_t> ThreadingSerializerDelegate::GetSharedArrayBufferId(v8::Isolate* isolate, v8::Local<v8::SharedArrayBuffer> shared_array_buffer) {
+  if (shared_array_buffers_) {
+    uint32_t id = static_cast<uint32_t>(shared_array_buffers_->size());
+    shared_array_buffers_->push_back(shared_array_buffer->GetBackingStore());
+    return v8::Just(id);
+  }
+  return v8::Nothing<uint32_t>();
+}
+
 }  // namespace threading
 }  // namespace internal
 }  // namespace v8

@@ -92,6 +92,7 @@ ThreadPool::~ThreadPool() {
 }
 
 void ThreadPool::Submit(ThreadTask* task) {
+  IncrementActiveTasks();
   {
     v8::base::MutexGuard global_guard(&global_queue_mutex_);
     global_queue_.push(task);
@@ -103,6 +104,7 @@ void ThreadPool::Submit(ThreadTask* task) {
 }
 
 void ThreadPool::SubmitFromWorker(size_t worker_index, ThreadTask* task) {
+  IncrementActiveTasks();
   deques_[worker_index]->Push(task);
   if (sleeping_workers_.load(std::memory_order_seq_cst) > 0) {
     v8::base::MutexGuard guard(&pool_mutex_);
@@ -112,6 +114,7 @@ void ThreadPool::SubmitFromWorker(size_t worker_index, ThreadTask* task) {
 
 void ThreadPool::SubmitToWorker(size_t worker_index, ThreadTask* task) {
   DCHECK_LT(worker_index, pool_size_);
+  IncrementActiveTasks();
   {
     v8::base::MutexGuard private_guard(private_mutexes_[worker_index].get());
     private_queues_[worker_index]->push(task);
@@ -287,6 +290,7 @@ void ThreadPool::WorkerThread::Run() {
       ExecuteTask(isolate, task);
     }
     delete task;
+    pool_->DecrementActiveTasks();
   }
 
   if (isolate) {
@@ -308,7 +312,7 @@ void ThreadPool::WorkerThread::ExecuteTask(v8::Isolate* isolate, ThreadTask* tas
   std::vector<v8::Local<v8::Value>> args;
   const std::vector<uint8_t>& serialized_args = task->serialized_arguments();
   if (!serialized_args.empty()) {
-    ThreadingDeserializerDelegate delegate;
+    ThreadingDeserializerDelegate delegate(&task->shared_array_buffers());
     v8::ValueDeserializer deserializer(isolate, serialized_args.data(), serialized_args.size(), &delegate);
     delegate.SetDeserializer(&deserializer);
 
@@ -431,6 +435,19 @@ void ThreadPool::WorkerThread::SerializeAndSetResult(v8::Isolate* isolate,
   v8::Local<v8::Value> exception_val;
   if (try_catch.HasCaught()) {
     exception_val = try_catch.Exception();
+    if (exception_val->IsObject()) {
+      v8::Local<v8::Object> err_obj = exception_val.As<v8::Object>();
+      v8::Local<v8::String> stack_key = v8::String::NewFromUtf8Literal(isolate, "stack");
+      v8::Local<v8::Value> stack_val;
+      if (err_obj->Get(context, stack_key).ToLocal(&stack_val) && stack_val->IsString()) {
+        v8::String::Utf8Value stack_utf8(isolate, stack_val);
+        std::string new_stack = std::string(*stack_utf8) + "\n" + task->caller_stack_trace();
+        v8::Local<v8::String> new_stack_str;
+        if (v8::String::NewFromUtf8(isolate, new_stack.c_str(), v8::NewStringType::kNormal).ToLocal(&new_stack_str)) {
+          err_obj->Set(context, stack_key, new_stack_str).Check();
+        }
+      }
+    }
   } else {
     exception_val = v8::Exception::Error(
         v8::String::NewFromUtf8Literal(isolate, "Unknown execution error"));

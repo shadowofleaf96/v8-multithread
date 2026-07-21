@@ -23,10 +23,12 @@ struct TaskResult {
 
 class ThreadTask {
  public:
-  ThreadTask(std::string function_source, std::vector<uint8_t> serialized_arguments, std::vector<std::shared_ptr<v8::BackingStore>> backing_stores = {})
+  ThreadTask(std::string function_source, std::vector<uint8_t> serialized_arguments, std::vector<std::shared_ptr<v8::BackingStore>> backing_stores = {}, std::vector<std::shared_ptr<v8::BackingStore>> shared_array_buffers = {}, std::string caller_stack_trace = "")
       : function_source_(std::move(function_source)),
         serialized_arguments_(std::move(serialized_arguments)),
-        backing_stores_(std::move(backing_stores)) {}
+        backing_stores_(std::move(backing_stores)),
+        shared_array_buffers_(std::move(shared_array_buffers)),
+        caller_stack_trace_(std::move(caller_stack_trace)) {}
 
   virtual ~ThreadTask() = default;
 
@@ -36,6 +38,8 @@ class ThreadTask {
   const std::string& function_source() const { return function_source_; }
   const std::vector<uint8_t>& serialized_arguments() const { return serialized_arguments_; }
   const std::vector<std::shared_ptr<v8::BackingStore>>& backing_stores() const { return backing_stores_; }
+  const std::vector<std::shared_ptr<v8::BackingStore>>& shared_array_buffers() const { return shared_array_buffers_; }
+  const std::string& caller_stack_trace() const { return caller_stack_trace_; }
 
   std::future<TaskResult> GetFuture() {
     return promise_.get_future();
@@ -52,6 +56,8 @@ class ThreadTask {
   std::string function_source_;
   std::vector<uint8_t> serialized_arguments_;
   std::vector<std::shared_ptr<v8::BackingStore>> backing_stores_;
+  std::vector<std::shared_ptr<v8::BackingStore>> shared_array_buffers_;
+  std::string caller_stack_trace_;
   std::promise<TaskResult> promise_;
 };
 

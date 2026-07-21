@@ -112,6 +112,9 @@ V8_OBJECT class JSSynchronizationPrimitive : public AlwaysSharedSpaceJSObject {
  public:
   ExternalPointerMember<kWaiterQueueNodeTag> waiter_queue_head_;
   std::atomic<uint32_t> state_;
+#if !V8_COMPRESS_POINTERS
+  uint32_t padding_;
+#endif
 } V8_OBJECT_END;
 
 // Synchronization primitives only store raw data past JSObject; no tagged

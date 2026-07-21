@@ -185,11 +185,14 @@ static Tagged<Object> ArrayParallelCommon(BuiltinArguments args, Isolate* isolat
       }
     }
 
+    v8::Local<v8::Array> args_arr = v8::Array::New(v8_isolate, 1);
+    args_arr->Set(context, 0, chunk).FromJust();
+
     threading::ThreadingSerializerDelegate delegate;
     v8::ValueSerializer serializer(v8_isolate, &delegate);
     delegate.SetSerializer(&serializer);
     serializer.WriteHeader();
-    if (!serializer.WriteValue(context, chunk).FromMaybe(false)) {
+    if (!serializer.WriteValue(context, args_arr).FromMaybe(false)) {
       v8_isolate->ThrowException(v8::Exception::Error(
           v8::String::NewFromUtf8Literal(v8_isolate, "Failed to serialize chunk")));
       return ReadOnlyRoots(isolate).exception();

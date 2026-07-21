@@ -48,6 +48,10 @@ class ThreadPool {
   void Terminate();
   void Resize(size_t new_pool_size);
 
+  void IncrementActiveTasks() { active_tasks_.fetch_add(1, std::memory_order_relaxed); }
+  void DecrementActiveTasks() { active_tasks_.fetch_sub(1, std::memory_order_relaxed); }
+  bool HasActiveTasks() const { return active_tasks_.load(std::memory_order_relaxed) > 0; }
+
   size_t pool_size() const { return pool_size_; }
 
  private:
@@ -88,6 +92,7 @@ class ThreadPool {
   v8::base::ConditionVariable work_cv_;
   std::atomic<bool> terminated_{false};
   std::atomic<int> sleeping_workers_{0};
+  std::atomic<int> active_tasks_{0};
 };
 
 }  // namespace threading

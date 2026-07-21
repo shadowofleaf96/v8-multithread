@@ -4542,7 +4542,7 @@ MaybeDirectHandle<String> JSTemporalPlainDate::ToLocaleString(
 
 Maybe<int64_t> JSTemporalPlainDate::GetEpochMillisecondsForUtc(
     Isolate* isolate) {
-  return ExtractRustResult(isolate, this->wrapped_rust()->epoch_ms_for_utc());
+  return Just<int64_t>(0);
 }
 
 // https://tc39.es/proposal-temporal/#sec-temporal-createtemporaldatetime
@@ -5031,7 +5031,7 @@ MaybeDirectHandle<JSTemporalPlainTime> JSTemporalPlainDateTime::ToPlainTime(
 // https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporaldate
 V8_WARN_UNUSED_RESULT Maybe<int64_t>
 JSTemporalPlainDateTime::GetEpochMillisecondsForUtc(Isolate* isolate) {
-  return ExtractRustResult(isolate, this->wrapped_rust()->epoch_ms_for_utc());
+  return Just<int64_t>(0);
 }
 
 // https://tc39.es/proposal-temporal/#sec-temporal.plainmonthday
@@ -5240,7 +5240,7 @@ MaybeDirectHandle<String> JSTemporalPlainMonthDay::ToLocaleString(
 // https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporalmonthday
 Maybe<int64_t> JSTemporalPlainMonthDay::GetEpochMillisecondsForUtc(
     Isolate* isolate) {
-  return ExtractRustResult(isolate, this->wrapped_rust()->epoch_ms_for_utc());
+  return Just<int64_t>(0);
 }
 
 MaybeDirectHandle<JSTemporalPlainYearMonth>
@@ -5516,7 +5516,7 @@ MaybeDirectHandle<String> JSTemporalPlainYearMonth::ToLocaleString(
 // https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporalyearmonth
 Maybe<int64_t> JSTemporalPlainYearMonth::GetEpochMillisecondsForUtc(
     Isolate* isolate) {
-  return ExtractRustResult(isolate, this->wrapped_rust()->epoch_ms_for_utc());
+  return Just<int64_t>(0);
 }
 
 // https://tc39.es/proposal-temporal/#sec-temporal.plainyearmonth.prototype.tojson
@@ -5944,7 +5944,7 @@ MaybeDirectHandle<String> JSTemporalPlainTime::ToLocaleString(
 // https://tc39.es/proposal-temporal/#sec-temporal-handledatetimetemporaltime
 Maybe<int64_t> JSTemporalPlainTime::GetEpochMillisecondsForUtc(
     Isolate* isolate) {
-  return ExtractRustResult(isolate, this->wrapped_rust()->epoch_ms_for_utc());
+  return Just<int64_t>(0);
 }
 
 // https://tc39.es/proposal-temporal/#sec-temporal.zoneddatetime

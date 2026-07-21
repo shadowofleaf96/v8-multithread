@@ -67,6 +67,9 @@
 #include "src/execution/simulator.h"
 #include "src/execution/v8threads.h"
 #include "src/execution/vm-state-inl.h"
+#ifdef V8_ENABLE_MULTITHREADING
+#include "src/threading/thread-pool.h"
+#endif
 #include "src/handles/global-handles.h"
 #include "src/handles/persistent-handles.h"
 #include "src/handles/shared-object-conveyor-handles.h"
@@ -10005,6 +10008,12 @@ void Isolate::RequestInterrupt(InterruptCallback callback, void* data) {
 }
 
 bool Isolate::HasPendingBackgroundTasks() {
+#ifdef V8_ENABLE_MULTITHREADING
+  if (i::threading::ThreadPool::GetInstance() &&
+      i::threading::ThreadPool::GetInstance()->HasActiveTasks()) {
+    return true;
+  }
+#endif
 #if V8_ENABLE_WEBASSEMBLY
   i::Isolate* i_isolate = reinterpret_cast<i::Isolate*>(this);
   return i::wasm::GetWasmEngine()->HasRunningCompileJob(i_isolate);

@@ -286,7 +286,10 @@ To build Node.js with V8 multithreading support:
 Changelog
 =============
 
-### Memory Optimization Update (July 2026)
+### Memory Optimization & Diagnostics Update (July 2026)
+- **Zero-Copy SharedArrayBuffer**: Added native `SharedArrayBuffer` support to `Thread.spawn`, allowing threads to instantly share and modify memory in parallel without transfer or copying overhead.
+- **Unified Cross-Thread Stack Traces**: Errors thrown inside worker threads automatically capture and append the main thread's caller stack frame (`Thread.spawn` call site) for seamless debugging across thread boundaries.
+- **V8 Native Task Integration**: Integrated `ThreadPool` task tracking into `v8::Isolate::HasPendingBackgroundTasks()`, seamlessly supporting top-level `await` in embedders and `d8`.
 - **Zero-Copy ArrayBuffer Transfer**: Added the ability to transfer `ArrayBuffer` objects between threads using the `{ transfer: [buffer] }` option in `Thread.spawn` and `tx.send`, eliminating the overhead of copying large memory structures.
 - **Dynamic Pool Sizing**: Introduced `Thread.getPoolSize()` and `Thread.setPoolSize(n)` builtins to dynamically scale the thread pool up and down. The underlying deque arrays also automatically shrink to reclaim memory when idle.
 - **Bounded Channels**: `Thread.channel(capacity)` now accepts a capacity limit. Full channels exert back-pressure, pausing the `Promise` of the sender instead of infinitely queuing messages in memory.
