@@ -218,6 +218,30 @@ const valid = await data.parallelFilter(async (item) => {
 const total = await numbers.parallelReduce(async (a, b) => a + b, 0);
 ```
 
+### Objects, Classes, and OOP
+
+Because V8 isolates operate on a **"shared-nothing" memory model**, threads use **Structured Cloning** to pass data. This perfectly deep-copies plain objects (POJOs), Arrays, and Maps, but **strips functions, methods, and prototypes**. 
+
+If you want to use Object-Oriented Programming across threads, you have two options:
+
+1. **Rehydration**: Send plain object data across the thread boundary, and re-wrap it in a Class instance on the receiving end.
+2. **Shared Memory**: Back your Class state with a `SharedArrayBuffer` so multiple threads can safely mutate the exact same memory in parallel.
+
+```javascript
+class Player {
+  constructor(data) { Object.assign(this, data); }
+  attack() { console.log(this.name + " attacks!"); }
+}
+
+const p = new Player({ name: "Arthur" });
+
+Thread.spawn((rawPlayerData) => {
+  // Rehydrate the plain object back into a Class instance
+  const workerPlayer = new Player(rawPlayerData);
+  workerPlayer.attack(); // ✅ Works perfectly!
+}, p); // `p` is sent as a plain object stripped of methods
+```
+
 ### Building with Multithreading
 
 Multithreading is opt-in. Enable it with the `v8_enable_multithreading` GN flag:
@@ -294,12 +318,13 @@ Changelog
 - **Dynamic Pool Sizing**: Introduced `Thread.getPoolSize()` and `Thread.setPoolSize(n)` builtins to dynamically scale the thread pool up and down. The underlying deque arrays also automatically shrink to reclaim memory when idle.
 - **Bounded Channels**: `Thread.channel(capacity)` now accepts a capacity limit. Full channels exert back-pressure, pausing the `Promise` of the sender instead of infinitely queuing messages in memory.
 - **Lazy Worker Initialization**: Worker threads now lazily initialize their `v8::Isolate` environments and are constrained to strict heap size limits (2MB initial, 16MB maximum), dramatically reducing baseline RAM consumption.
+- **Multithreading Engine Stability Fixes**: Resolved isolate mismatch sandbox crashes in cross-thread Channel and Mutex promise resolution, corrected a parameter passing bug in parallel array iteration chunks, and fixed a microtask queue lifecycle task leak in the `ThreadPool` that caused `d8` to hang on exit.
 
 ### Initial Multithreading Release
 - **Core Engine**: Introduced the Chase-Lev work-stealing thread pool directly into the V8 runtime.
 - **Thread Control**: Added `Thread.spawn`, `Thread.join`, and non-blocking `Thread.sleep`.
 - **Concurrency Primitives**: Introduced safe message-passing `Channels` and shared-state `Mutex` constructs.
-- **Automatic Parallelism**: Added `Array.prototype.parallelMap`, `Array.prototype.parallelFilter`, and parallel task execution within `Promise.all()`.
+- **Automatic Parallelism**: Added `Array.prototype.parallelMap`, `Array.prototype.parallelFilter`, `Array.prototype.parallelReduce`, and parallel task execution within `Promise.all()`.
 
 
 Contributing

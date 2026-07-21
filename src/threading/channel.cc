@@ -74,11 +74,13 @@ class ResolveChannelTask : public ThreadTask {
  public:
   ResolveChannelTask(v8::Isolate* receiver_isolate,
                      ChannelMessage data,
-                     v8::Global<v8::Promise::Resolver>* resolver)
+                     v8::Global<v8::Promise::Resolver>* resolver,
+                     bool is_next = false)
       : ThreadTask("", {}),
         receiver_isolate_(receiver_isolate),
         data_(std::move(data)),
-        resolver_(resolver) {}
+        resolver_(resolver),
+        is_next_(is_next) {}
 
   ~ResolveChannelTask() override {
     if (!ThreadPool::IsDisposing()) {
@@ -111,7 +113,14 @@ class ResolveChannelTask : public ThreadTask {
     if (deserializer.ReadHeader(context).FromMaybe(false)) {
       v8::Local<v8::Value> val;
       if (deserializer.ReadValue(context).ToLocal(&val)) {
-        res->Resolve(context, val).FromJust();
+        if (is_next_) {
+          v8::Local<v8::Object> result = v8::Object::New(isolate);
+          result->Set(context, v8::String::NewFromUtf8Literal(isolate, "value"), val).Check();
+          result->Set(context, v8::String::NewFromUtf8Literal(isolate, "done"), v8::False(isolate)).Check();
+          res->Resolve(context, result).FromJust();
+        } else {
+          res->Resolve(context, val).FromJust();
+        }
       } else {
         res->Reject(context, v8::Exception::Error(v8::String::NewFromUtf8Literal(isolate, "Failed to deserialize message"))).FromJust();
       }
@@ -125,6 +134,54 @@ class ResolveChannelTask : public ThreadTask {
   v8::Isolate* receiver_isolate_;
   ChannelMessage data_;
   v8::Global<v8::Promise::Resolver>* resolver_;
+  bool is_next_;
+};
+
+class ResolveCloseTask : public ThreadTask {
+ public:
+  ResolveCloseTask(v8::Isolate* receiver_isolate,
+                   v8::Global<v8::Promise::Resolver>* resolver,
+                   bool is_next)
+      : ThreadTask("", {}),
+        receiver_isolate_(receiver_isolate),
+        resolver_(resolver),
+        is_next_(is_next) {}
+
+  ~ResolveCloseTask() override {
+    if (!ThreadPool::IsDisposing()) {
+      delete resolver_;
+    }
+  }
+
+  bool IsInternal() const override { return true; }
+
+  v8::Isolate* receiver_isolate() const { return receiver_isolate_; }
+
+  void RunInternal(v8::Isolate* isolate) override {
+    DCHECK_EQ(isolate, receiver_isolate_);
+    v8::HandleScope handle_scope(isolate);
+    v8::Local<v8::Context> context = isolate->GetCurrentContext();
+    if (context.IsEmpty()) {
+      context = v8::Context::New(isolate);
+    }
+    v8::Context::Scope context_scope(context);
+
+    v8::Local<v8::Promise::Resolver> res = resolver_->Get(isolate);
+    if (is_next_) {
+      v8::Local<v8::Object> result = v8::Object::New(isolate);
+      result->Set(context, v8::String::NewFromUtf8Literal(isolate, "value"), v8::Undefined(isolate)).Check();
+      result->Set(context, v8::String::NewFromUtf8Literal(isolate, "done"), v8::True(isolate)).Check();
+      res->Resolve(context, result).FromJust();
+    } else {
+      res->Resolve(context, v8::Undefined(isolate)).FromJust();
+    }
+    resolver_->Reset();
+  }
+
+ private:
+  v8::Isolate* receiver_isolate_;
+  v8::Global<v8::Promise::Resolver>* resolver_;
+  bool is_next_;
 };
 
 void ChannelSender::Send(const v8::FunctionCallbackInfo<v8::Value>& args) {
@@ -149,6 +206,11 @@ void ChannelSender::Send(const v8::FunctionCallbackInfo<v8::Value>& args) {
     return;
   }
   std::shared_ptr<ChannelState> state = *wrapped;
+
+  if (state->closed) {
+    isolate->ThrowException(v8::Exception::Error(v8::String::NewFromUtf8Literal(isolate, "Channel is closed")));
+    return;
+  }
 
   ThreadingSerializerDelegate delegate;
   v8::ValueSerializer serializer(isolate, &delegate);
@@ -188,7 +250,7 @@ void ChannelSender::Send(const v8::FunctionCallbackInfo<v8::Value>& args) {
     state->pending_receivers.pop();
     state->mutex.Unlock();
 
-    auto* resolve_task = new ResolveChannelTask(pending.isolate, std::move(msg), new v8::Global<v8::Promise::Resolver>(pending.isolate, pending.resolver->Pass()));
+    auto* resolve_task = new ResolveChannelTask(pending.isolate, std::move(msg), pending.resolver, pending.is_next);
 
     if (pending.worker_index != -1) {
       ThreadPool::GetInstance()->SubmitToWorker(pending.worker_index, resolve_task);
@@ -232,7 +294,65 @@ void ChannelSender::Send(const v8::FunctionCallbackInfo<v8::Value>& args) {
   }
 }
 
+void ChannelSender::Close(const v8::FunctionCallbackInfo<v8::Value>& args) {
+  v8::Isolate* isolate = args.GetIsolate();
+  v8::HandleScope handle_scope(isolate);
+
+  v8::Local<v8::Object> holder = args.This();
+  if (holder->InternalFieldCount() < 1) {
+    isolate->ThrowException(v8::Exception::TypeError(v8::String::NewFromUtf8Literal(isolate, "Invalid receiver object")));
+    return;
+  }
+  auto* wrapped = static_cast<std::shared_ptr<ChannelState>*>(holder->GetAlignedPointerFromInternalField(0, v8::kEmbedderDataTypeTagDefault));
+  if (!wrapped || !*wrapped) return;
+  std::shared_ptr<ChannelState> state = *wrapped;
+
+  state->mutex.Lock();
+  state->closed = true;
+  while (!state->pending_receivers.empty()) {
+    PendingReceiver pending = std::move(state->pending_receivers.front());
+    state->pending_receivers.pop();
+
+    auto* resolve_close_task = new ResolveCloseTask(pending.isolate, pending.resolver, pending.is_next);
+
+    if (pending.worker_index != -1) {
+      ThreadPool::GetInstance()->SubmitToWorker(pending.worker_index, resolve_close_task);
+    } else {
+      class ForegroundResolveCloseTask : public v8::Task {
+       public:
+        explicit ForegroundResolveCloseTask(ResolveCloseTask* task) : task_(task) {}
+        void Run() override {
+          task_->RunInternal(task_->receiver_isolate());
+          delete task_;
+        }
+       private:
+        ResolveCloseTask* task_;
+      };
+
+      auto task_runner = V8::GetCurrentPlatform()->GetForegroundTaskRunner(pending.isolate);
+      if (task_runner) {
+        task_runner->PostTask(std::make_unique<ForegroundResolveCloseTask>(resolve_close_task));
+      } else {
+        delete resolve_close_task;
+      }
+    }
+  }
+  state->mutex.Unlock();
+}
+
 void ChannelReceiver::Recv(const v8::FunctionCallbackInfo<v8::Value>& args) {
+  RecvInternal(args, false);
+}
+
+void ChannelReceiver::Next(const v8::FunctionCallbackInfo<v8::Value>& args) {
+  RecvInternal(args, true);
+}
+
+void ChannelReceiver::AsyncIterator(const v8::FunctionCallbackInfo<v8::Value>& args) {
+  args.GetReturnValue().Set(args.This());
+}
+
+void ChannelReceiver::RecvInternal(const v8::FunctionCallbackInfo<v8::Value>& args, bool is_next) {
   v8::Isolate* isolate = args.GetIsolate();
   v8::HandleScope handle_scope(isolate);
   v8::Local<v8::Context> context = isolate->GetCurrentContext();
@@ -253,6 +373,20 @@ void ChannelReceiver::Recv(const v8::FunctionCallbackInfo<v8::Value>& args) {
   std::shared_ptr<ChannelState> state = *wrapped;
 
   state->mutex.Lock();
+  if (state->closed && state->messages.empty()) {
+    state->mutex.Unlock();
+    if (is_next) {
+      v8::Local<v8::Object> result = v8::Object::New(isolate);
+      result->Set(context, v8::String::NewFromUtf8Literal(isolate, "value"), v8::Undefined(isolate)).Check();
+      result->Set(context, v8::String::NewFromUtf8Literal(isolate, "done"), v8::True(isolate)).Check();
+      resolver->Resolve(context, result).FromJust();
+    } else {
+      resolver->Resolve(context, v8::Undefined(isolate)).FromJust();
+    }
+    args.GetReturnValue().Set(resolver->GetPromise());
+    return;
+  }
+
   if (!state->messages.empty()) {
     ChannelMessage msg = std::move(state->messages.front());
     state->messages.pop();
@@ -268,7 +402,7 @@ void ChannelReceiver::Recv(const v8::FunctionCallbackInfo<v8::Value>& args) {
     state->mutex.Unlock();
 
     if (has_pending_sender) {
-      auto* resolve_sender_task = new ResolveSenderTask(pending_sender.isolate, new v8::Global<v8::Promise::Resolver>(pending_sender.isolate, pending_sender.resolver->Pass()));
+      auto* resolve_sender_task = new ResolveSenderTask(pending_sender.isolate, pending_sender.resolver);
       if (pending_sender.worker_index != -1) {
         ThreadPool::GetInstance()->SubmitToWorker(pending_sender.worker_index, resolve_sender_task);
       } else {
@@ -303,7 +437,14 @@ void ChannelReceiver::Recv(const v8::FunctionCallbackInfo<v8::Value>& args) {
     if (deserializer.ReadHeader(context).FromMaybe(false)) {
       v8::Local<v8::Value> val;
       if (deserializer.ReadValue(context).ToLocal(&val)) {
-        resolver->Resolve(context, val).FromJust();
+        if (is_next) {
+          v8::Local<v8::Object> result = v8::Object::New(isolate);
+          result->Set(context, v8::String::NewFromUtf8Literal(isolate, "value"), val).Check();
+          result->Set(context, v8::String::NewFromUtf8Literal(isolate, "done"), v8::False(isolate)).Check();
+          resolver->Resolve(context, result).FromJust();
+        } else {
+          resolver->Resolve(context, val).FromJust();
+        }
       } else {
         resolver->Reject(context, v8::Exception::Error(v8::String::NewFromUtf8Literal(isolate, "Failed to deserialize message"))).FromJust();
       }
@@ -318,6 +459,7 @@ void ChannelReceiver::Recv(const v8::FunctionCallbackInfo<v8::Value>& args) {
   pending.isolate = isolate;
   pending.worker_index = g_worker_index;
   pending.resolver = new v8::Global<v8::Promise::Resolver>(isolate, resolver);
+  pending.is_next = is_next;
 
   state->pending_receivers.push(std::move(pending));
   state->mutex.Unlock();

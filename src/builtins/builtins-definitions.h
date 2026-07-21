@@ -1543,7 +1543,8 @@ constexpr int kGearboxGenericBuiltinIdOffset = -2;
   CPP(ThreadGetPoolSize, kDontAdaptArgumentsSentinel)                          \
   CPP(ThreadSetPoolSize, kDontAdaptArgumentsSentinel)                          \
   CPP(ArrayParallelMap, kDontAdaptArgumentsSentinel)                           \
-  CPP(ArrayParallelFilter, kDontAdaptArgumentsSentinel)
+  CPP(ArrayParallelFilter, kDontAdaptArgumentsSentinel)                        \
+  CPP(ArrayParallelReduce, kDontAdaptArgumentsSentinel)
 #else
 #define BUILTIN_LIST_MULTITHREADING(CPP)
 #endif

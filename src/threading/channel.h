@@ -25,6 +25,7 @@ struct PendingReceiver {
   v8::Isolate* isolate;
   int worker_index;
   v8::Global<v8::Promise::Resolver>* resolver;
+  bool is_next = false;
 };
 
 struct PendingSender {
@@ -40,6 +41,7 @@ struct ChannelState {
   std::queue<PendingReceiver> pending_receivers;
   std::queue<PendingSender> pending_senders;
   size_t capacity = 0;
+  bool closed = false;
 
   ~ChannelState();
 };
@@ -48,6 +50,7 @@ class ChannelSender {
  public:
   explicit ChannelSender(std::shared_ptr<ChannelState> state) : state_(std::move(state)) {}
   static void Send(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void Close(const v8::FunctionCallbackInfo<v8::Value>& args);
   std::shared_ptr<ChannelState> state() const { return state_; }
 
  private:
@@ -58,9 +61,12 @@ class ChannelReceiver {
  public:
   explicit ChannelReceiver(std::shared_ptr<ChannelState> state) : state_(std::move(state)) {}
   static void Recv(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void Next(const v8::FunctionCallbackInfo<v8::Value>& args);
+  static void AsyncIterator(const v8::FunctionCallbackInfo<v8::Value>& args);
   std::shared_ptr<ChannelState> state() const { return state_; }
 
  private:
+  static void RecvInternal(const v8::FunctionCallbackInfo<v8::Value>& args, bool is_next);
   std::shared_ptr<ChannelState> state_;
 };
 

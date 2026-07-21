@@ -184,6 +184,7 @@ v8::Local<v8::Object> CreateChannelSender(v8::Isolate* isolate, std::shared_ptr<
   v8::Local<v8::ObjectTemplate> sender_templ = v8::ObjectTemplate::New(isolate);
   sender_templ->SetInternalFieldCount(1);
   sender_templ->Set(isolate, "send", v8::FunctionTemplate::New(isolate, ChannelSender::Send));
+  sender_templ->Set(isolate, "close", v8::FunctionTemplate::New(isolate, ChannelSender::Close));
   return WrapSharedPtr<ChannelState>(isolate, context, std::move(state), sender_templ, "channel_sender");
 }
 
@@ -192,6 +193,8 @@ v8::Local<v8::Object> CreateChannelReceiver(v8::Isolate* isolate, std::shared_pt
   v8::Local<v8::ObjectTemplate> receiver_templ = v8::ObjectTemplate::New(isolate);
   receiver_templ->SetInternalFieldCount(1);
   receiver_templ->Set(isolate, "recv", v8::FunctionTemplate::New(isolate, ChannelReceiver::Recv));
+  receiver_templ->Set(isolate, "next", v8::FunctionTemplate::New(isolate, ChannelReceiver::Next));
+  receiver_templ->Set(v8::Symbol::GetAsyncIterator(isolate), v8::FunctionTemplate::New(isolate, ChannelReceiver::AsyncIterator));
   return WrapSharedPtr<ChannelState>(isolate, context, std::move(state), receiver_templ, "channel_receiver");
 }
 
@@ -347,17 +350,20 @@ BUILTIN(ThreadJoin) {
   auto* resolver_global_ptr = new v8::Global<v8::Promise::Resolver>(v8_isolate, resolver);
   int caller_worker_index = threading::g_worker_index;
 
-  class BackgroundJoinWaiterTask : public v8::Task {
+  class JoinWaiterTask : public threading::ThreadTask {
    public:
-    BackgroundJoinWaiterTask(std::shared_ptr<std::future<threading::TaskResult>> future_ptr,
-                             v8::Isolate* v8_isolate, int caller_worker_index,
-                             v8::Global<v8::Promise::Resolver>* resolver_global_ptr)
-        : future_ptr_(std::move(future_ptr)),
+    JoinWaiterTask(std::shared_ptr<std::future<threading::TaskResult>> future_ptr,
+                   v8::Isolate* v8_isolate, int caller_worker_index,
+                   v8::Global<v8::Promise::Resolver>* resolver_global_ptr)
+        : threading::ThreadTask("", {}),
+          future_ptr_(std::move(future_ptr)),
           v8_isolate_(v8_isolate),
           caller_worker_index_(caller_worker_index),
           resolver_global_ptr_(resolver_global_ptr) {}
 
-    void Run() override {
+    bool IsInternal() const override { return true; }
+
+    void RunInternal(v8::Isolate* isolate) override {
       threading::TaskResult result = future_ptr_->get();
       if (threading::ThreadPool::IsDisposing()) return;
 
@@ -392,9 +398,8 @@ BUILTIN(ThreadJoin) {
     v8::Global<v8::Promise::Resolver>* resolver_global_ptr_;
   };
 
-  V8::GetCurrentPlatform()->PostTaskOnWorkerThread(
-      v8::TaskPriority::kUserBlocking,
-      std::make_unique<BackgroundJoinWaiterTask>(future_ptr, v8_isolate, caller_worker_index, resolver_global_ptr));
+  auto* waiter_task = new JoinWaiterTask(future_ptr, v8_isolate, caller_worker_index, resolver_global_ptr);
+  threading::ThreadPool::GetInstance()->Submit(waiter_task);
 
   return *v8::Utils::OpenHandle(*resolver->GetPromise());
 }
@@ -420,35 +425,56 @@ BUILTIN(ThreadSleep) {
   auto* resolver_global_ptr = new v8::Global<v8::Promise::Resolver>(v8_isolate, resolver);
   int caller_worker_index = threading::g_worker_index;
 
-  std::thread([v8_isolate, caller_worker_index, resolver_global_ptr, ms]() mutable {
-    std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+  class SleepTask : public threading::ThreadTask {
+   public:
+    SleepTask(int64_t ms, v8::Isolate* v8_isolate, int caller_worker_index,
+              v8::Global<v8::Promise::Resolver>* resolver_global_ptr)
+        : threading::ThreadTask("", {}),
+          ms_(ms),
+          v8_isolate_(v8_isolate),
+          caller_worker_index_(caller_worker_index),
+          resolver_global_ptr_(resolver_global_ptr) {}
 
-    if (threading::ThreadPool::IsDisposing()) return;
+    bool IsInternal() const override { return true; }
 
-    auto* task = new ResolveSleepTask(v8_isolate, resolver_global_ptr);
+    void RunInternal(v8::Isolate* isolate) override {
+      std::this_thread::sleep_for(std::chrono::milliseconds(ms_));
+      if (threading::ThreadPool::IsDisposing()) return;
 
-    if (caller_worker_index != -1) {
-      threading::ThreadPool::GetInstance()->SubmitToWorker(caller_worker_index, task);
-    } else {
-      class ForegroundSleepTask : public v8::Task {
-       public:
-        explicit ForegroundSleepTask(ResolveSleepTask* task) : task_(task) {}
-        void Run() override {
-          task_->RunInternal(task_->receiver_isolate());
-          delete task_;
-        }
-       private:
-        ResolveSleepTask* task_;
-      };
+      auto* task = new ResolveSleepTask(v8_isolate_, resolver_global_ptr_);
 
-      auto task_runner = V8::GetCurrentPlatform()->GetForegroundTaskRunner(v8_isolate);
-      if (task_runner) {
-        task_runner->PostTask(std::make_unique<ForegroundSleepTask>(task));
+      if (caller_worker_index_ != -1) {
+        threading::ThreadPool::GetInstance()->SubmitToWorker(caller_worker_index_, task);
       } else {
-        delete task;
+        class ForegroundSleepTask : public v8::Task {
+         public:
+          explicit ForegroundSleepTask(ResolveSleepTask* task) : task_(task) {}
+          void Run() override {
+            task_->RunInternal(task_->receiver_isolate());
+            delete task_;
+          }
+         private:
+          ResolveSleepTask* task_;
+        };
+
+        auto task_runner = V8::GetCurrentPlatform()->GetForegroundTaskRunner(v8_isolate_);
+        if (task_runner) {
+          task_runner->PostTask(std::make_unique<ForegroundSleepTask>(task));
+        } else {
+          delete task;
+        }
       }
     }
-  }).detach();
+
+   private:
+    int64_t ms_;
+    v8::Isolate* v8_isolate_;
+    int caller_worker_index_;
+    v8::Global<v8::Promise::Resolver>* resolver_global_ptr_;
+  };
+
+  auto* sleep_task = new SleepTask(ms, v8_isolate, caller_worker_index, resolver_global_ptr);
+  threading::ThreadPool::GetInstance()->Submit(sleep_task);
 
   return *v8::Utils::OpenHandle(*resolver->GetPromise());
 }

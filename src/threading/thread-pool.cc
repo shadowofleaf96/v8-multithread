@@ -386,6 +386,7 @@ void ThreadPool::WorkerThread::ExecuteTask(v8::Isolate* isolate, ThreadTask* tas
         if (internal_task) {
           ExecuteTask(isolate, internal_task);
           delete internal_task;
+          pool_->DecrementActiveTasks();
         } else {
           v8::base::OS::Sleep(v8::base::TimeDelta::FromMilliseconds(1));
         }

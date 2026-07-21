@@ -157,6 +157,19 @@ const evens = await numbers.parallelFilter(n => n % 2 === 0);
 console.log(evens); // [2, 4]
 ```
 
+### `Array.prototype.parallelReduce(callback, initialValue)`
+Works like standard `Array.prototype.reduce()`, but operates in a tree-based parallel reduction map-reduce style across multiple threads, dramatically speeding up cumulative operations.
+- **`callback(accumulator, currentValue)`**: A function to execute on each element in the array.
+- **`initialValue`**: (Optional) A value to use as the first argument to the first call of the callback.
+- **Returns**: A `Promise` resolving to the final accumulated value.
+
+**Example:**
+```javascript
+const numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+const sum = await numbers.parallelReduce((a, b) => a + b, 0);
+console.log(sum); // 55
+```
+
 ### `Promise.all(promises)`
 When using `Promise.all()` with multiple promises, V8 will automatically execute their subsequent `.then()` reactions in parallel if the reaction handlers are pure (e.g., they only use their arguments and don't capture outer variables in closures).
 

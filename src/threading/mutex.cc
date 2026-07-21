@@ -130,7 +130,7 @@ void MutexState::ReleaseLock() {
     pending_locks.pop();
     mutex.Unlock();
 
-    auto* task = new ResolveMutexTask(shared_from_this(), pending.isolate, new v8::Global<v8::Function>(pending.isolate, pending.callback->Pass()), new v8::Global<v8::Promise::Resolver>(pending.isolate, pending.resolver->Pass()));
+    auto* task = new ResolveMutexTask(shared_from_this(), pending.isolate, pending.callback, pending.resolver);
 
     if (pending.worker_index != -1) {
       ThreadPool::GetInstance()->SubmitToWorker(pending.worker_index, task);

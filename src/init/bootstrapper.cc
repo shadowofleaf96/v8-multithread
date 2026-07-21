@@ -2502,6 +2502,7 @@ void Genesis::InitializeGlobal(DirectHandle<JSGlobalObject> global_object,
 #ifdef V8_ENABLE_MULTITHREADING
     SimpleInstallFunction(isolate_, proto, "parallelMap", Builtin::kArrayParallelMap, 1, kDontAdapt);
     SimpleInstallFunction(isolate_, proto, "parallelFilter", Builtin::kArrayParallelFilter, 1, kDontAdapt);
+    SimpleInstallFunction(isolate_, proto, "parallelReduce", Builtin::kArrayParallelReduce, 1, kDontAdapt);
 #endif
     SimpleInstallFunction(isolate_, proto, "every", Builtin::kArrayEvery, 1,
                           kDontAdapt);
